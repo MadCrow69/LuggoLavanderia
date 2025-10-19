@@ -10,8 +10,25 @@
     <div id="root"></div>
 
     <script>
-        // Estado da aplicação
-        let selectedDate = new Date().toISOString().split('T')[0];
+        // Função para pegar data atual de São Paulo
+        function getHojeSaoPaulo() {
+            const agora = new Date();
+            
+            // Usar fuso horário de São Paulo (America/Sao_Paulo)
+            const saoPauloDate = new Date(agora.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
+            
+            const year = saoPauloDate.getFullYear();
+            const month = String(saoPauloDate.getMonth() + 1).padStart(2, '0');
+            const day = String(saoPauloDate.getDate()).padStart(2, '0');
+            
+            const dataFormatada = `${year}-${month}-${day}`;
+            console.log('Data de hoje (São Paulo):', dataFormatada);
+            
+            return dataFormatada;
+        }
+
+        // Estado da aplicação (sempre pega hoje São Paulo)
+        let selectedDate = getHojeSaoPaulo();
         let reservas = {};
         let machineStatus = {
             L1: 'defeito',
@@ -45,27 +62,31 @@
             secadora: Array.from({ length: 17 }, (_, i) => `${String(8 + i).padStart(2, '0')}:00`)
         };
 
-        // Dados de exemplo para demonstração (removido - não usar mais)
-        function carregarDadosExemplo() {
-            // Não carregar dados de exemplo
-            console.log('Sistema conectado ao Google Sheets - sem dados de exemplo');
-        }
-
         // Funções auxiliares
         function getReservaKey(maquina, hora) {
             return `${maquina}-${hora}`;
         }
 
         function formatarData(data) {
-            const date = new Date(data);
-            const hoje = new Date();
-            const amanha = new Date();
-            amanha.setDate(hoje.getDate() + 1);
+            // Usar sempre fuso de São Paulo para comparações
+            const selectedDateSP = new Date(data + 'T12:00:00'); // Evitar problemas de fuso
+            const hojeSP = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
+            const amanhaSP = new Date(hojeSP);
+            amanhaSP.setDate(hojeSP.getDate() + 1);
             
-            if (date.toDateString() === hoje.toDateString()) return 'Hoje';
-            if (date.toDateString() === amanha.toDateString()) return 'Amanhã';
+            console.log('formatarData - Data selecionada:', data);
+            console.log('formatarData - Hoje SP:', hojeSP.toISOString().split('T')[0]);
+            console.log('formatarData - Selected SP:', selectedDateSP.toISOString().split('T')[0]);
             
-            return date.toLocaleDateString('pt-BR', { 
+            // Comparar apenas as datas (YYYY-MM-DD)
+            const selectedStr = selectedDateSP.toISOString().split('T')[0];
+            const hojeStr = hojeSP.toISOString().split('T')[0];
+            const amanhaStr = amanhaSP.toISOString().split('T')[0];
+            
+            if (selectedStr === hojeStr) return 'Hoje';
+            if (selectedStr === amanhaStr) return 'Amanhã';
+            
+            return selectedDateSP.toLocaleDateString('pt-BR', { 
                 weekday: 'short', 
                 day: '2-digit', 
                 month: '2-digit' 
@@ -82,7 +103,8 @@
         }
 
         function voltarParaHoje() {
-            selectedDate = new Date().toISOString().split('T')[0];
+            selectedDate = getHojeSaoPaulo(); // Usar fuso de São Paulo
+            console.log('Voltando para hoje:', selectedDate);
             
             // Carregar dados para hoje
             carregarReservasData();
@@ -108,67 +130,88 @@
             return '';
         }
 
-        // Função para carregar todas as reservas e filtrar no cliente
-        function carregarReservasData() {
+        // Função para carregar status das máquinas
+        async function carregarStatusMaquinas() {
+            try {
+                console.log('Carregando status das máquinas...');
+                
+                const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=getMachineStatus`);
+                const result = await response.json();
+                
+                console.log('Status recebido:', result);
+                
+                if (result.success && result.data) {
+                    machineStatus = { ...result.data };
+                    console.log('Status das máquinas carregado:', machineStatus);
+                } else {
+                    console.log('Usando status padrão das máquinas');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar status das máquinas:', error);
+                console.log('Usando status padrão das máquinas');
+            }
+        }
+
+        // Função para carregar reservas de uma data específica
+        async function carregarReservasData() {
             loading = true;
             render();
             
             console.log('Carregando todas as reservas...');
             
-            fetch(`${GOOGLE_SCRIPT_URL}?action=getReservas&data=${selectedDate}`)
-                .then(response => response.json())
-                .then(result => {
-                    console.log('Todas as reservas recebidas:', result);
+            try {
+                const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=getReservas&data=${selectedDate}`);
+                const result = await response.json();
+                
+                console.log('Todas as reservas recebidas:', result);
+                
+                if (result.success && result.data) {
+                    // Filtrar reservas pela data selecionada
+                    const reservasFiltradas = {};
                     
-                    if (result.success && result.data) {
-                        // Filtrar reservas pela data selecionada
-                        const reservasFiltradas = {};
+                    Object.keys(result.data).forEach(key => {
+                        const reserva = result.data[key];
+                        const dataOriginal = reserva.dataOriginal;
                         
-                        Object.keys(result.data).forEach(key => {
-                            const reserva = result.data[key];
-                            const dataOriginal = reserva.dataOriginal;
-                            
-                            // Extrair data da string usando função robusta
-                            const dataReserva = extrairData(dataOriginal);
-                            
-                            console.log(`Comparando: "${dataReserva}" === "${selectedDate}" para reserva ${key}`);
-                            
-                            // Se a reserva é para a data selecionada, incluir
-                            if (dataReserva === selectedDate) {
-                                reservasFiltradas[key] = {
-                                    usuario: reserva.usuario,
-                                    apartamento: reserva.apartamento,
-                                    maquina: reserva.maquina,
-                                    hora: reserva.hora
-                                };
-                                console.log(`✓ Reserva incluída: ${key} - ${reserva.usuario}`);
-                            } else {
-                                console.log(`✗ Reserva ignorada: ${key} (data: ${dataReserva})`);
-                            }
-                        });
+                        // Extrair data da string usando função robusta
+                        const dataReserva = extrairData(dataOriginal);
                         
-                        reservas[selectedDate] = reservasFiltradas;
+                        console.log(`Comparando: "${dataReserva}" === "${selectedDate}" para reserva ${key}`);
                         
-                        const numReservas = Object.keys(reservasFiltradas).length;
-                        console.log(`${numReservas} reservas encontradas para ${selectedDate}`);
-                        
-                        if (numReservas === 0) {
-                            console.log(`Data ${selectedDate} sem reservas - mostrar todos livres`);
+                        // Se a reserva é para a data selecionada, incluir
+                        if (dataReserva === selectedDate) {
+                            reservasFiltradas[key] = {
+                                usuario: reserva.usuario,
+                                apartamento: reserva.apartamento,
+                                maquina: reserva.maquina,
+                                hora: reserva.hora
+                            };
+                            console.log(`✓ Reserva incluída: ${key} - ${reserva.usuario}`);
                         } else {
-                            console.log('Reservas filtradas:', reservasFiltradas);
+                            console.log(`✗ Reserva ignorada: ${key} (data: ${dataReserva})`);
                         }
+                    });
+                    
+                    reservas[selectedDate] = reservasFiltradas;
+                    
+                    const numReservas = Object.keys(reservasFiltradas).length;
+                    console.log(`${numReservas} reservas encontradas para ${selectedDate}`);
+                    
+                    if (numReservas === 0) {
+                        console.log(`Data ${selectedDate} sem reservas - mostrar todos livres`);
                     } else {
-                        reservas[selectedDate] = {};
+                        console.log('Reservas filtradas:', reservasFiltradas);
                     }
-                })
-                .catch(error => {
-                    console.error('Erro ao carregar reservas:', error);
+                } else {
                     reservas[selectedDate] = {};
-                })
-                .finally(() => {
-                    loading = false;
-                    render();
-                });
+                }
+            } catch (error) {
+                console.error('Erro ao carregar reservas:', error);
+                reservas[selectedDate] = {};
+            } finally {
+                loading = false;
+                render();
+            }
         }
 
         // Funções de API
@@ -278,6 +321,43 @@
             deleteReserva(selectedDate, maquina, hora);
         }
 
+        async function saveMachineStatus(newStatus) {
+            try {
+                loading = true;
+                render();
+                
+                console.log('Salvando status das máquinas:', newStatus);
+                
+                const formData = new FormData();
+                formData.append('action', 'saveMachineStatus');
+                formData.append('status', JSON.stringify(newStatus));
+
+                const response = await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                console.log('Resposta do servidor para status:', result);
+                
+                if (result.success) {
+                    machineStatus = { ...newStatus };
+                    console.log('Status das máquinas atualizado com sucesso');
+                    return true;
+                } else {
+                    throw new Error('Falha na resposta do servidor');
+                }
+            } catch (error) {
+                console.error('Erro ao salvar status:', error);
+                alert('Erro ao alterar status da máquina. Verifique sua conexão.');
+                return false;
+            } finally {
+                loading = false;
+                render();
+            }
+        }
+
         function alterarStatusMaquina(machineId) {
             const currentStatus = machineStatus[machineId];
             const novoStatus = currentStatus === 'ok' ? 'defeito' : 'ok';
@@ -285,20 +365,25 @@
             const confirmar = confirm(`Alterar ${machineId} para "${novoStatus}"?`);
             if (!confirmar) return;
             
-            machineStatus[machineId] = novoStatus;
+            const newMachineStatus = {
+                ...machineStatus,
+                [machineId]: novoStatus
+            };
             
             // Se marcar como defeito, cancelar todas as reservas
             if (novoStatus === 'defeito') {
                 Object.keys(reservas).forEach(data => {
                     Object.keys(reservas[data]).forEach(key => {
                         if (key.startsWith(machineId + '-')) {
-                            delete reservas[data][key];
+                            const [maquina, hora] = key.split('-');
+                            deleteReserva(data, maquina, hora);
                         }
                     });
                 });
             }
             
-            render();
+            // Salvar no Google Sheets
+            saveMachineStatus(newMachineStatus);
         }
 
         // Função de renderização
@@ -577,14 +662,19 @@
             `).join('');
         }
 
-        // Inicializar aplicação (versão mais robusta)
+        // Inicializar aplicação
         async function inicializarApp() {
-            console.log('Inicializando aplicação...');
+            console.log('=== INICIALIZANDO APLICAÇÃO ===');
+            
+            // Forçar recalcular a data atual
+            selectedDate = getHojeSaoPaulo();
+            console.log('Data selecionada (São Paulo):', selectedDate);
+            console.log('Data atual do sistema:', new Date().toISOString().split('T')[0]);
             
             try {
                 // Carregar status das máquinas com timeout
                 const statusPromise = Promise.race([
-                    loadMachineStatus(),
+                    carregarStatusMaquinas(),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
                 ]);
                 
@@ -594,7 +684,7 @@
                 
                 // Carregar reservas com timeout
                 const reservasPromise = Promise.race([
-                    loadReservas(selectedDate),
+                    carregarReservasData(),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
                 ]);
                 
@@ -608,7 +698,7 @@
             
             // Sempre renderizar, mesmo com erro
             render();
-            console.log('Aplicação inicializada');
+            console.log('=== APLICAÇÃO INICIALIZADA ===');
         }
 
         // Inicializar quando a página carregar
