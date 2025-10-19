@@ -25,7 +25,6 @@
 
         // URL do Google Apps Script
         const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwYj7Ohs7uABugvQ3duNGmTmbGEjJqf7FmyIhmPFNBuWOd6v9M-1fbOneEXx0Y6fZSc4A/exec';
-        
 
         // Configurações
         const machines = {
@@ -46,15 +45,10 @@
             secadora: Array.from({ length: 17 }, (_, i) => `${String(8 + i).padStart(2, '0')}:00`)
         };
 
-        // Dados de exemplo para demonstração
+        // Dados de exemplo para demonstração (removido - não usar mais)
         function carregarDadosExemplo() {
-            const hoje = new Date().toISOString().split('T')[0];
-            reservas[hoje] = {
-                'L2-14:00': { usuario: 'Caroline', apartamento: '201', maquina: 'L2', hora: '14:00' },
-                'L3-14:00': { usuario: 'Caroline', apartamento: '201', maquina: 'L3', hora: '14:00' },
-                'S3-18:00': { usuario: 'Vinícius', apartamento: '402', maquina: 'S3', hora: '18:00' },
-                'S3-19:00': { usuario: 'Vinícius', apartamento: '402', maquina: 'S3', hora: '19:00' }
-            };
+            // Não carregar dados de exemplo
+            console.log('Sistema conectado ao Google Sheets - sem dados de exemplo');
         }
 
         // Funções auxiliares
@@ -82,12 +76,99 @@
             const current = new Date(selectedDate);
             current.setDate(current.getDate() + direcao);
             selectedDate = current.toISOString().split('T')[0];
-            render();
+            
+            // Carregar dados para a nova data
+            carregarReservasData();
         }
 
         function voltarParaHoje() {
             selectedDate = new Date().toISOString().split('T')[0];
+            
+            // Carregar dados para hoje
+            carregarReservasData();
+        }
+
+        // Função para extrair data no formato YYYY-MM-DD de qualquer string
+        function extrairData(dataString) {
+            if (!dataString) return '';
+            
+            try {
+                // Tentar parsear como Date
+                const date = new Date(dataString);
+                if (!isNaN(date)) {
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    return `${year}-${month}-${day}`;
+                }
+            } catch (e) {
+                console.log('Erro ao parsear data:', dataString);
+            }
+            
+            return '';
+        }
+
+        // Função para carregar todas as reservas e filtrar no cliente
+        function carregarReservasData() {
+            loading = true;
             render();
+            
+            console.log('Carregando todas as reservas...');
+            
+            fetch(`${GOOGLE_SCRIPT_URL}?action=getReservas&data=${selectedDate}`)
+                .then(response => response.json())
+                .then(result => {
+                    console.log('Todas as reservas recebidas:', result);
+                    
+                    if (result.success && result.data) {
+                        // Filtrar reservas pela data selecionada
+                        const reservasFiltradas = {};
+                        
+                        Object.keys(result.data).forEach(key => {
+                            const reserva = result.data[key];
+                            const dataOriginal = reserva.dataOriginal;
+                            
+                            // Extrair data da string usando função robusta
+                            const dataReserva = extrairData(dataOriginal);
+                            
+                            console.log(`Comparando: "${dataReserva}" === "${selectedDate}" para reserva ${key}`);
+                            
+                            // Se a reserva é para a data selecionada, incluir
+                            if (dataReserva === selectedDate) {
+                                reservasFiltradas[key] = {
+                                    usuario: reserva.usuario,
+                                    apartamento: reserva.apartamento,
+                                    maquina: reserva.maquina,
+                                    hora: reserva.hora
+                                };
+                                console.log(`✓ Reserva incluída: ${key} - ${reserva.usuario}`);
+                            } else {
+                                console.log(`✗ Reserva ignorada: ${key} (data: ${dataReserva})`);
+                            }
+                        });
+                        
+                        reservas[selectedDate] = reservasFiltradas;
+                        
+                        const numReservas = Object.keys(reservasFiltradas).length;
+                        console.log(`${numReservas} reservas encontradas para ${selectedDate}`);
+                        
+                        if (numReservas === 0) {
+                            console.log(`Data ${selectedDate} sem reservas - mostrar todos livres`);
+                        } else {
+                            console.log('Reservas filtradas:', reservasFiltradas);
+                        }
+                    } else {
+                        reservas[selectedDate] = {};
+                    }
+                })
+                .catch(error => {
+                    console.error('Erro ao carregar reservas:', error);
+                    reservas[selectedDate] = {};
+                })
+                .finally(() => {
+                    loading = false;
+                    render();
+                });
         }
 
         // Funções de API
@@ -496,9 +577,42 @@
             `).join('');
         }
 
-        // Inicializar aplicação
-        carregarDadosExemplo();
-        render();
+        // Inicializar aplicação (versão mais robusta)
+        async function inicializarApp() {
+            console.log('Inicializando aplicação...');
+            
+            try {
+                // Carregar status das máquinas com timeout
+                const statusPromise = Promise.race([
+                    loadMachineStatus(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+                ]);
+                
+                await statusPromise.catch(err => {
+                    console.log('Erro ao carregar status, usando padrão:', err.message);
+                });
+                
+                // Carregar reservas com timeout
+                const reservasPromise = Promise.race([
+                    loadReservas(selectedDate),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+                ]);
+                
+                await reservasPromise.catch(err => {
+                    console.log('Erro ao carregar reservas, continuando:', err.message);
+                });
+                
+            } catch (error) {
+                console.log('Erro na inicialização:', error);
+            }
+            
+            // Sempre renderizar, mesmo com erro
+            render();
+            console.log('Aplicação inicializada');
+        }
+
+        // Inicializar quando a página carregar
+        inicializarApp();
     </script>
 </body>
 </html>
