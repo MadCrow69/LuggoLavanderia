@@ -314,11 +314,101 @@
             saveReserva(selectedDate, maquina, hora, nome.trim(), apartamento.trim());
         }
 
-        function cancelarReserva(maquina, hora, nomeUsuario, aptoUsuario) {
+        // Registrar log (melhor esforço): tenta enviar ao servidor e ignora falhas
+        async function registrarLog(tipo, detalhes) {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'saveLog');
+                formData.append('tipo', tipo);
+                formData.append('detalhes', JSON.stringify({
+                    ...detalhes,
+                    timestamp: new Date().toISOString()
+                }));
+
+                const response = await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (!result?.success) {
+                    console.log('Falha ao registrar log (servidor):', result);
+                }
+            } catch (e) {
+                console.log('Falha ao registrar log (offline):', e.message);
+            }
+        }
+
+        async function cancelarReserva(maquina, hora, nomeUsuario, aptoUsuario) {
             const confirmar = confirm(`Cancelar reserva de ${nomeUsuario} (Apt ${aptoUsuario})?`);
             if (!confirmar) return;
-            
-            deleteReserva(selectedDate, maquina, hora);
+
+            const solicitante = prompt('Digite o nome de quem solicita o cancelamento:');
+            if (!solicitante) return;
+
+            const ok = await deleteReserva(selectedDate, maquina, hora);
+            if (ok) {
+                registrarLog('cancelamento', {
+                    data: selectedDate,
+                    maquina,
+                    hora,
+                    usuarioAnterior: nomeUsuario,
+                    aptoAnterior: aptoUsuario,
+                    solicitante: solicitante.trim()
+                });
+                alert('Reserva cancelada.');
+            }
+        }
+
+        async function trocarReserva(maquina, hora, nomeUsuario, aptoUsuario) {
+            const confirmar = confirm(`Trocar a reserva de ${nomeUsuario} (Apt ${aptoUsuario}) por outra pessoa?`);
+            if (!confirmar) return;
+
+            const solicitante = prompt('Digite o nome de quem solicita a troca:');
+            if (!solicitante) return;
+
+            const novoNome = prompt('Digite o novo nome para a reserva:');
+            if (!novoNome) return;
+            const novoApto = prompt('Digite o novo apartamento (ex: 201):');
+            if (!novoApto) return;
+
+            // Estratégia: remover a reserva atual e criar a nova na sequência
+            const removido = await deleteReserva(selectedDate, maquina, hora);
+            if (!removido) {
+                alert('Não foi possível trocar a reserva (falha ao remover).');
+                return;
+            }
+
+            const criado = await saveReserva(selectedDate, maquina, hora, novoNome.trim(), novoApto.trim());
+            if (!criado) {
+                alert('Não foi possível criar a nova reserva.');
+                return;
+            }
+
+            registrarLog('troca', {
+                data: selectedDate,
+                maquina,
+                hora,
+                usuarioAnterior: nomeUsuario,
+                aptoAnterior: aptoUsuario,
+                usuarioNovo: novoNome.trim(),
+                aptoNovo: novoApto.trim(),
+                solicitante: solicitante.trim()
+            });
+            alert('Reserva trocada com sucesso.');
+        }
+
+        function acaoReservaOcupada(maquina, hora, nomeUsuario, aptoUsuario) {
+            const escolha = prompt('Horário ocupado. Digite:\n1 para cancelar\n2 para trocar de pessoa');
+            if (!escolha) return;
+            const opcao = String(escolha).trim();
+            if (opcao === '1') {
+                cancelarReserva(maquina, hora, nomeUsuario, aptoUsuario);
+            } else if (opcao === '2') {
+                trocarReserva(maquina, hora, nomeUsuario, aptoUsuario);
+            } else {
+                alert('Opção inválida.');
+            }
         }
 
         async function saveMachineStatus(newStatus) {
@@ -533,7 +623,7 @@
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                                         <div style="width: 1rem; height: 1rem; background: #fecaca; border: 2px solid #fca5a5; border-radius: 0.25rem;"></div>
-                                        <span>Ocupado - clique para cancelar</span>
+                                        <span>Ocupado - clique para cancelar/trocar</span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                                         <div style="width: 1rem; height: 1rem; background: #f3f4f6; border: 2px solid #d1d5db; border-radius: 0.25rem;"></div>
@@ -651,7 +741,7 @@
                                 <div onclick="${machineStatus[machine.id] === 'defeito' ? '' : 
                                     isDisponivel ? 
                                         `abrirReserva('${machine.id}', '${hora}')` : 
-                                        `cancelarReserva('${machine.id}', '${hora}', '${reserva?.usuario}', '${reserva?.apartamento}')`
+                                        ''
                                 }" style="
                                     padding: 0.5rem;
                                     border-radius: 0.5rem;
@@ -681,6 +771,10 @@
                                             `<div style="font-size: 0.625rem;">
                                                 <div style="font-weight: 500;">${reserva?.usuario}</div>
                                                 <div style="color: #6b7280;">Apt ${reserva?.apartamento}</div>
+                                                <div style="display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.25rem; align-items: stretch;">
+                                                    <button onclick="cancelarReserva('${machine.id}', '${hora}', '${reserva?.usuario}', '${reserva?.apartamento}')" style="background: #ef4444; color: #fff; border: none; border-radius: 0.25rem; padding: 0.2rem 0.375rem; font-size: 0.625rem; cursor: pointer; width: 100%;">Cancelar</button>
+                                                    <button onclick="trocarReserva('${machine.id}', '${hora}', '${reserva?.usuario}', '${reserva?.apartamento}')" style="background: #2563eb; color: #fff; border: none; border-radius: 0.25rem; padding: 0.2rem 0.375rem; font-size: 0.625rem; cursor: pointer; width: 100%;">Trocar</button>
+                                                </div>
                                             </div>`
                                     }
                                 </div>
